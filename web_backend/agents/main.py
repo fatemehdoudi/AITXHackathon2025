@@ -137,12 +137,6 @@ def parse_all_bcbs_pages(delete_after=True):
         print("⚠️ No providers extracted.")
         return []
 
-    with open("bcbs_all_pages.csv", "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=all_doctors[0].keys())
-        writer.writeheader()
-        writer.writerows(all_doctors)
-
-    print(f"\n🎯 Saved {len(all_doctors)} providers → bcbs_all_pages.csv")
     return all_doctors
 
 
