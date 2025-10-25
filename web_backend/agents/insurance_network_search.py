@@ -1,6 +1,6 @@
 # insurance_network_search.py
 from typing import Dict, Any
-from insurance_portal_subfunctions import (
+from agents.insurance_portal_subfunctions import (
     find_bcbs_portal,
 )
 from tavily import TavilyClient
