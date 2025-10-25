@@ -16,6 +16,7 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 admin.site.site_header = "MedMatch Admin"
 admin.site.site_title = "MedMatch Admin"
@@ -23,6 +24,8 @@ admin.site.index_title = "MedMatch Administration"
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("api/auth/login/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
+    path("api/auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("api/", include("insurance_networks.urls")),
     path("api/", include("insurance_plans.urls")),
     path("api/", include("providers.urls")),
