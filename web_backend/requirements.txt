@@ -68,3 +68,4 @@ tavily-python
 beautifulsoup4
 pandas
 djangorestframework
+uvicorn
