@@ -12,3 +12,11 @@ Agentic AI for healthcare provider matching
 1. Go to `http://127.0.0.1:8000/admin`
 2. Use the username and password provided to you
 
+
+## To run the mobile app
+1. `cd` into `mobile`
+2. Run `npm run ios` to run the ios version. To run android versino, run `npm run android`
+3. Ensure you have Expo Go installed on your mobile device. You may need to have an Expo account as well.
+4. Ensure the development device (laptop) and your mobile device are on the same WiFi network.
+5. After running `npm run ios` in step 2, the terminal should say something like 'Opening exp://172.16.11.65:8081 on [your device name]'. Open the browser on your mobile device, and go to the URL provided in the terminal.
+6. That's it. You should be able to access the app on your phone.
