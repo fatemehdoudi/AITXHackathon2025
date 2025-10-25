@@ -1,5 +1,8 @@
 import os
 from langchain_openai import ChatOpenAI
+from dotenv import load_dotenv
+load_dotenv()
+
 
 def get_nemotron():
     """Return a LangChain-compatible LLM client using OpenRouter + Nemotron."""
