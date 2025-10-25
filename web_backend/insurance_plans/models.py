@@ -18,3 +18,6 @@ class InsurancePlan(models.Model):
 
     def __str__(self):
         return f"{self.network.name} – {self.name}"
+
+    class Meta:
+        unique_together = [("network", "name")]
