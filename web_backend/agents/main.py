@@ -1,151 +1,182 @@
 """
-Enhanced pipeline:
-1. Collect BCBS providers dynamically
-2. Search and summarize reviews (LLM sentiment + count)
-3. Extract distance from address
-4. Compute final weighted score
-5. Rank all doctors 1–N
+Full agentic pipeline (LLM modularized via models.py):
+1. Ask for symptom or specialty
+2. Infer specialty via LLM if needed
+3. Ask for insurance, prefix, and location
+4. If BCBS → scrape providers live
+5. Search and summarize reviews (via Tavily + LLM)
+6. Score and rank providers (sentiment + reviews + distance + alignment)
+7. Cleanup temp files
 """
 
-import asyncio, os, csv, math, re
+import asyncio, os, csv, math, re, glob
 from typing import TypedDict, Optional
 from langgraph.graph import StateGraph, START, END
-from playwright.async_api import async_playwright
 from dotenv import load_dotenv
 from tavily import TavilyClient
-from openai import OpenAI
+from bcbs_scraper import get_bcbs_providers_live
+from models import get_nemotron  # ✅ LLM abstraction
 
 # -----------------------------
 # Setup
 # -----------------------------
 load_dotenv()
 tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
-client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=os.getenv("OPEN_AI_API_KEY"))
-
+llm = get_nemotron()  # ✅ use Nemotron via OpenRouter
 
 # -----------------------------
-# State
+# Graph State
 # -----------------------------
 class GraphState(TypedDict):
     insurance: Optional[str]
     specialty: Optional[str]
     location: Optional[str]
     postal_code: Optional[str]
+    symptom: Optional[str]
+    member_id: Optional[str]
     providers: Optional[list]
 
 
 # -----------------------------
-# Step 1: Get user info
+# Step 0: LLM helpers
+# -----------------------------
+def get_specialty_from_symptom(symptom_description: str) -> str:
+    """Infer the most appropriate medical specialty from a symptom/disease."""
+    prompt = f"""
+You are a medical triage assistant.
+Given this patient complaint or disease:
+"{symptom_description}"
+
+Return the most relevant specialty in strict JSON:
+{{"recommended": "Dermatology"}}
+"""
+    try:
+        resp = llm.invoke(prompt)
+        text = resp.content.strip() if hasattr(resp, "content") else str(resp)
+        match = re.search(r'"recommended"\s*:\s*"([^"]+)"', text)
+        if match:
+            specialty = match.group(1).strip()
+            print(f"🧠 Inferred specialty: {specialty}")
+            return specialty
+    except Exception as e:
+        print(f"⚠️ Specialty inference failed: {e}")
+    return "Internal Medicine"
+
+
+def is_specialty_term(user_input: str) -> bool:
+    """Determine if input is a medical specialty using LLM classification."""
+    prompt = f'Is "{user_input}" a valid medical specialty? Answer only YES or NO.'
+    try:
+        resp = llm.invoke(prompt)
+        text = resp.content.strip().upper() if hasattr(resp, "content") else str(resp).upper()
+        return text.startswith("YES")
+    except Exception as e:
+        print(f"⚠️ LLM specialty check failed: {e}")
+        return False
+
+
+# -----------------------------
+# Step 1: Collect user info
 # -----------------------------
 async def get_user_info(state: GraphState):
-    print("🧾 Collecting user info...")
-    state["insurance"] = "Blue Cross Blue Shield"
-    state["specialty"] = "Dermatology"
-    state["location"] = "College Station, TX 77840"
-    state["postal_code"] = "77840"
-    print(f"User Info: {state}")
+    print("🧾 Collecting user info...\n")
+
+    user_input = input("🩺 Describe your main symptom or enter a specialty: ").strip()
+    state["symptom"] = user_input
+
+    if is_specialty_term(user_input):
+        state["specialty"] = user_input
+    else:
+        state["specialty"] = get_specialty_from_symptom(user_input)
+
+    insurance = input("🏥 Enter your insurance provider (e.g., Blue Cross Blue Shield, Aetna, Cigna): ").strip()
+    state["insurance"] = insurance
+
+    if "bcbs" in insurance.lower() or "blue" in insurance.lower():
+        member_id = input("💳 Enter your BCBS Member ID or prefix (e.g., ZGP1234567): ").strip()
+        prefix = member_id[:3].upper() if len(member_id) >= 3 else "UNK"
+        state["member_id"] = prefix
+    else:
+        state["member_id"] = None
+
+    location = input("📍 Enter your location (City, State ZIP): ").strip()
+    postal_match = re.search(r"\b\d{5}\b", location)
+    postal_code = postal_match.group(0) if postal_match else input("📬 Enter your ZIP code: ").strip()
+
+    state["location"] = location
+    state["postal_code"] = postal_code
+
+    print(f"\n✅ Summary of user input:")
+    print(f" - Specialty: {state['specialty']}")
+    print(f" - Insurance: {state['insurance']}")
+    print(f" - Member ID Prefix: {state.get('member_id', 'N/A')}")
+    print(f" - Location: {state['location']}")
+    print(f" - Postal Code: {state['postal_code']}\n{'-'*60}")
     return state
 
 
 # -----------------------------
-# Step 2: Get BCBS providers
+# Step 2: Provider lookup
 # -----------------------------
-async def get_bcbs_providers_live(postal_code, prefix, specialty, location, max_pages=1, headless=True):
-    """Extract BCBS provider info dynamically."""
-    import urllib.parse
-    encoded_loc = urllib.parse.quote(location)
-    encoded_spec = urllib.parse.quote(specialty)
-
-    base_url = (
-        f"https://provider.bcbs.com/app/public/#/one/"
-        f"city=&state=&postalCode={postal_code}&country=&insurerCode=BCBSA_I"
-        f"&brandCode=BCBSANDHF&alphaPrefix={prefix.lower()}&bcbsaProductId"
-        f"/search/alphaPrefix={prefix.upper()}"
-        f"&isPromotionSearch=true&location={encoded_loc}&radius=25"
-        f"&searchCategory=SPECIALTY&query={encoded_spec}"
-    )
-
+async def find_providers(state: GraphState):
+    insurance = state.get("insurance", "").lower()
+    specialty = state.get("specialty")
+    location = state.get("location")
+    postal = state.get("postal_code")
+    prefix = state.get("member_id")
     providers = []
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=headless)
-        page = await browser.new_page()
 
-        for i in range(1, max_pages + 1):
-            url = f"{base_url}&page={i}"
-            print(f"🌐 Loading BCBS page {i}: {url}")
-            await page.goto(url, wait_until="networkidle", timeout=60000)
-            await page.wait_for_selector('[data-test="provider-card"]', timeout=15000)
-
-            cards = await page.eval_on_selector_all(
-                '[data-test="provider-card"]',
-                """
-                cards => cards.map(card => {
-                    const nameEl = card.querySelector('[data-test="provider-r-card-header-name"], h2, a');
-                    const specEl = card.querySelector('[data-test="specialties"]');
-                    const addrEl = card.querySelector('address');
-                    const phoneEl = card.querySelector('a[href^="tel:"]');
-                    return {
-                        Name: nameEl ? nameEl.textContent.trim() : "N/A",
-                        Specialty: specEl ? specEl.textContent.trim() : "N/A",
-                        Address: addrEl ? addrEl.textContent.trim().replace(/\\s+/g, ' ') : "N/A",
-                        Phone: phoneEl ? phoneEl.textContent.trim() : "N/A"
-                    };
-                })
-                """,
-            )
-
-            print(f"✅ Extracted {len(cards)} providers from page {i}")
-            providers.extend(cards)
-
-        await browser.close()
-
-    if providers:
-        with open("bcbs_live_providers.csv", "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=providers[0].keys())
-            writer.writeheader()
-            writer.writerows(providers)
-        print(f"💾 Saved {len(providers)} providers → bcbs_live_providers.csv")
+    if "bcbs" in insurance or "blue" in insurance:
+        print("🔷 Fetching BCBS providers dynamically...")
+        providers = await get_bcbs_providers_live(
+            postal_code=postal,
+            prefix=prefix,
+            specialty=specialty,
+            location=location,
+            max_pages=1,
+            headless=True,
+        )
     else:
-        print("⚠️ No providers found.")
-    return providers
+        print(f"⚠️ No automated provider lookup for {insurance}.")
+        if os.path.exists("providers.csv"):
+            with open("providers.csv", newline="", encoding="utf-8") as f:
+                providers = list(csv.DictReader(f))
+            print(f"📁 Loaded {len(providers)} providers from providers.csv")
+        else:
+            print("❌ No providers found.")
+            return state
+
+    state["providers"] = providers
+    return state
 
 
 # -----------------------------
-# Step 3: Reviews + Summarization
+# Step 3: Review search
 # -----------------------------
 def search_doctor_reviews(name, city, specialty):
-    query = (
-        f"{name} {city} {specialty} reviews "
-        "site:healthgrades.com OR site:vitals.com OR site:zocdoc.com OR site:ratemds.com"
-    )
-    print(f"🌐 Searching reviews for {name} ...")
+    query = f"{name} {city} {specialty} reviews site:healthgrades.com OR site:vitals.com OR site:zocdoc.com OR site:ratemds.com"
+    print(f"🌐 Searching reviews for {name}...")
     try:
         resp = tavily.search(query=query, max_results=8)
-        results = [
-            {"title": r["title"], "url": r["url"], "snippet": r["content"]}
-            for r in resp.get("results", [])
-        ]
-        print(f"✅ Found {len(results)} review pages.")
-        return results
+        return [{"title": r["title"], "url": r["url"], "snippet": r["content"]} for r in resp.get("results", [])]
     except Exception as e:
-        print(f"⚠️ Tavily error for {name}: {e}")
+        print(f"⚠️ Tavily error: {e}")
         return []
 
 
-def summarize_reviews(name, specialty, city, reviews):
-    """Summarize and extract sentiment + review count."""
+# -----------------------------
+# Step 4: Review summarization
+# -----------------------------
+def summarize_reviews(name, specialty, city, reviews, symptom: Optional[str] = None):
     if not reviews:
-        return {"name": name, "summary": "No reviews found.", "sentiment": 0, "review_count": 0}
+        return {"name": name, "sentiment": 0, "review_count": 0, "summary": "No reviews found."}
 
     site_text = "\n\n".join([f"{r['title']}\n{r['snippet']}" for r in reviews])
+    symptom_context = f"The patient is seeking help for '{symptom}'.\n" if symptom else ""
     prompt = f"""
-Summarize these reviews for Dr. {name}, a {specialty} in {city}.
-Provide:
-- A short summary of patient sentiment.
-- A numeric 1–10 reputation score.
-- The approximate number of distinct reviews mentioned (if unclear, estimate from snippets).
-
-Format exactly as:
+{symptom_context}
+Summarize these patient reviews for Dr. {name}, a {specialty} in {city}.
+Return strictly in the following format:
 Summary: ...
 Score: X/10
 Estimated Reviews: Y
@@ -154,129 +185,134 @@ Reviews:
 {site_text}
 """
     try:
-        resp = client.chat.completions.create(
-            model="nvidia/nemotron-nano-9b-v2",
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = resp.choices[0].message.content.strip()
-        print(f"\n🧠 Review summary for {name}:\n{text}\n{'-'*70}")
-
-        # Extract sentiment score and estimated review count
+        resp = llm.invoke(prompt)
+        text = resp.content.strip() if hasattr(resp, "content") else str(resp)
         score_match = re.search(r"Score:\s*(\d+(?:\.\d+)?)", text)
         reviews_match = re.search(r"Estimated Reviews:\s*(\d+)", text)
-
         sentiment = float(score_match.group(1)) if score_match else 0
         review_count = int(reviews_match.group(1)) if reviews_match else len(reviews)
-
-        return {
-            "name": name,
-            "summary": text,
-            "sentiment": sentiment,
-            "review_count": review_count,
-        }
+        print(f"\n🧠 Summary for {name}:\n{text}\n{'-'*70}")
+        return {"name": name, "sentiment": sentiment, "review_count": review_count, "summary": text}
     except Exception as e:
-        print(f"⚠️ LLM summarization error for {name}: {e}")
-        return {"name": name, "summary": "Error", "sentiment": 0, "review_count": 0}
+        print(f"⚠️ Summarization error for {name}: {e}")
+        return {"name": name, "sentiment": 0, "review_count": 0, "summary": "Error"}
 
 
 # -----------------------------
-# Step 4: Distance Parsing
+# 🧠 NEW: Specialty–symptom alignment reward
+# -----------------------------
+def compute_alignment_reward(specialty: str, symptom: Optional[str]) -> float:
+    """Use LLM to check if specialty fits the symptom; return multiplier."""
+    if not symptom:
+        return 1.0
+    prompt = f"""
+You are a medical expert.
+Is the specialty "{specialty}" appropriate for treating or diagnosing the symptom/disease "{symptom}"?
+Answer with one word only: YES, MAYBE, or NO.
+"""
+    try:
+        resp = llm.invoke(prompt)
+        answer = resp.content.strip().upper() if hasattr(resp, "content") else str(resp).upper()
+        if answer.startswith("YES"):
+            return 1.10
+        elif answer.startswith("MAYBE"):
+            return 1.05
+        else:
+            return 1.0
+    except Exception as e:
+        print(f"⚠️ Alignment check failed for {specialty}: {e}")
+        return 1.0
+
+
+# -----------------------------
+# Step 5: Scoring & ranking
 # -----------------------------
 def extract_distance(address):
-    """Parse distance in miles from address string like '... • 3.1 miles'."""
     match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*miles", address)
     return float(match.group(1)) if match else None
 
 
-# -----------------------------
-# Step 5: Composite Scoring
-# -----------------------------
-def compute_final_scores(providers, summaries):
-    """Combine sentiment, review count, and distance."""
+def compute_final_scores(providers, summaries, symptom: Optional[str] = None):
     results = []
     for p in providers:
-        summary = next((s for s in summaries if s["name"] == p["Name"]), None)
-        if not summary:
+        s = next((x for x in summaries if x["name"] == p["Name"]), None)
+        if not s:
             continue
-
-        sentiment = summary["sentiment"]
-        reviews = summary["review_count"]
+        sentiment = s["sentiment"]
+        reviews = s["review_count"]
         distance = extract_distance(p["Address"]) or 10.0
 
         review_score = min(1, math.log(1 + reviews) / math.log(1 + 50)) * 10
-        distance_score = max(0, (10 - min(distance, 10)))  # closer = higher
+        distance_score = max(0, 10 - min(distance, 10))
+        base_score = 0.5 * sentiment + 0.3 * review_score + 0.2 * distance_score
 
-        final_score = round(0.5 * sentiment + 0.3 * review_score + 0.2 * distance_score, 2)
+        align_multiplier = compute_alignment_reward(p["Specialty"], symptom)
+        final_score = round(base_score * align_multiplier, 2)
 
         results.append({
             "Name": p["Name"],
+            "FinalScore": final_score,
             "Sentiment": sentiment,
             "Reviews": reviews,
             "Distance(mi)": distance,
-            "FinalScore": final_score,
+            "AlignmentBonus": align_multiplier,
         })
 
     ranked = sorted(results, key=lambda x: x["FinalScore"], reverse=True)
-    print("\n🏁 Final Multi-Factor Ranking:\n")
+    print("\n🏁 Final Doctor Ranking (with alignment reward):\n")
     for i, r in enumerate(ranked, 1):
-        print(f"{i}. {r['Name']} — Final Score: {r['FinalScore']} (Sentiment {r['Sentiment']}/10, Reviews {r['Reviews']}, {r['Distance(mi)']} mi)")
+        bonus = f" (x{r['AlignmentBonus']})" if r['AlignmentBonus'] > 1 else ""
+        print(f"{i}. {r['Name']} — Score {r['FinalScore']}{bonus} "
+              f"(Sentiment {r['Sentiment']}/10, Reviews {r['Reviews']}, {r['Distance(mi)']} mi)")
     print("=" * 70)
-
     return ranked
 
 
 # -----------------------------
-# Step 6: Node Integration
+# Step 6: Pipeline execution
 # -----------------------------
-async def find_bcbs_providers(state: GraphState):
-    if "blue" not in state.get("insurance", "").lower():
-        print("⚠️ Currently supports only BCBS.")
+async def analyze_and_score(state: GraphState):
+    providers = state.get("providers", [])
+    if not providers:
+        print("❌ No providers to analyze.")
         return state
 
-    prefix = "ZGP"
-    print(f"🔎 Searching BCBS with prefix {prefix} ...")
-
-    providers = await get_bcbs_providers_live(
-        postal_code=state["postal_code"],
-        prefix=prefix,
-        specialty=state["specialty"],
-        location=state["location"],
-        max_pages=1,
-        headless=True,
-    )
-    state["providers"] = providers
-
     summaries = []
-    for p in providers[:3]:  # limit for testing
+    for p in providers:
         reviews = search_doctor_reviews(p["Name"], state["location"], p["Specialty"])
-        summaries.append(summarize_reviews(p["Name"], p["Specialty"], state["location"], reviews))
+        summaries.append(
+            summarize_reviews(p["Name"], p["Specialty"], state["location"], reviews, symptom=state["symptom"])
+        )
 
-    compute_final_scores(providers, summaries)
+    compute_final_scores(providers, summaries, symptom=state["symptom"])
+
+    for f in glob.glob("*.html") + glob.glob("*.csv"):
+        try:
+            os.remove(f)
+        except Exception as e:
+            print(f"⚠️ Could not delete {f}: {e}")
     return state
 
 
 # -----------------------------
-# Step 7: LangGraph Build
+# LangGraph orchestration
 # -----------------------------
 graph = StateGraph(GraphState)
 graph.add_node("GetUserInfo", get_user_info)
-graph.add_node("FindBCBSProviders", find_bcbs_providers)
+graph.add_node("FindProviders", find_providers)
+graph.add_node("AnalyzeAndScore", analyze_and_score)
 graph.add_edge(START, "GetUserInfo")
-graph.add_edge("GetUserInfo", "FindBCBSProviders")
-graph.add_edge("FindBCBSProviders", END)
+graph.add_edge("GetUserInfo", "FindProviders")
+graph.add_edge("FindProviders", "AnalyzeAndScore")
+graph.add_edge("AnalyzeAndScore", END)
 app = graph.compile()
 
 
 # -----------------------------
-# Step 8: Run
+# Runner
 # -----------------------------
 async def run():
-    result = await app.ainvoke({})
-    print("\n=== FINAL OUTPUT ===")
-    if result.get("providers"):
-        for p in result["providers"][:5]:
-            print(f"- {p['Name']} | {p['Specialty']} | {p['Address']} | {p['Phone']}")
-
+    await app.ainvoke({})
 
 if __name__ == "__main__":
     asyncio.run(run())
