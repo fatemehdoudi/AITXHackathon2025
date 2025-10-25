@@ -69,3 +69,4 @@ beautifulsoup4
 pandas
 djangorestframework
 uvicorn
+djangorestframework-simplejwt
