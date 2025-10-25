@@ -1,9 +1,7 @@
 # insurance_network_search.py
 from typing import Dict, Any
 from insurance_portal_subfunctions import (
-    find_aetna_portal,
     find_bcbs_portal,
-    find_generic_portal
 )
 from tavily import TavilyClient
 import os

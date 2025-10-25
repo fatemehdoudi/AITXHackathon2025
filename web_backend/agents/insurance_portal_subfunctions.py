@@ -15,7 +15,6 @@ def find_bcbs_portal(state: Dict[str, Any]) -> Dict[str, Any]:
         f"&alphaPrefix={prefix}"
         f"&bcbsaProductId"
     )
-    https://provider.bcbs.com/app/public/#/one/city=&state=&postalCode=77840&country=&insurerCode=BCBSA_I&brandCode=BCBSANDHF&alphaPrefix=zgp&bcbsaProductId/search/alphaPrefix=ZGP&isPromotionSearch=true&location=College%2520Station%252C%2520TX%252077840&page=1&query=dermatology&radius=25&searchCategory=SPECIALTY
 
     state["portal_links"] = [{
         "title": "Blue Cross Blue Shield Provider Finder",
