@@ -12,7 +12,7 @@ import re
 import urllib.parse
 import time
 
-from .utils import clean_bcbs_address
+from .utils import clean_bcbs_address, geocode_address
 
 # -----------------------------
 # 1. Graph State Schema
@@ -108,6 +108,9 @@ def parse_all_bcbs_pages(delete_after=True):
             address = address_tag.get_text(" ", strip=True) if address_tag else "N/A"
             address = clean_bcbs_address(address)
 
+            lat, lng = geocode_address(address)
+            
+
             phone_tag = card.find("a", href=lambda x: x and x.startswith("tel:"))
             phone = phone_tag.get_text(strip=True) if phone_tag else "N/A"
             
@@ -118,6 +121,8 @@ def parse_all_bcbs_pages(delete_after=True):
                 "specialty": specialty,
                 "address": address,
                 "phone": phone,
+                "lat": lat,
+                "lng": lng,
                 "source_file": os.path.basename(file_path),
             })
         return doctors
