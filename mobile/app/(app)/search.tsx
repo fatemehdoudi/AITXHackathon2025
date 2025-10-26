@@ -220,6 +220,32 @@ export default function SearchScreen() {
     return rows;
   }, [providers, origin, sortBy]);
 
+  const handleProviderSelection = (provider: Provider) => {
+    console.log("Selected provider:", provider);
+    const headers = new Headers();
+    headers.append("Content-Type", "application/json");
+
+    const raw = JSON.stringify({
+        "user": 1,
+        "provider": provider,
+        "search": 7,
+        "initial_reason": "",
+        "match_score_snapshot": provider.medmatch_score
+    });
+
+    const requestOptions = {
+        method: "POST",
+        headers: headers,
+        body: raw,
+        redirect: "follow"
+    };
+
+    fetch(`${API_BASE}/outreach/prospects/toggle/`, requestOptions)
+    .then((response) => response.text())
+    .then((result) => console.log(result))
+    .catch((error) => console.error(error));
+  }
+
   return (
     <View style={{ flex: 1, padding: 12, gap: 8 }}>
       {/* Search input */}
@@ -360,7 +386,7 @@ export default function SearchScreen() {
                   Map
                 </Button>
                 <View style={{ flex: 1 }} />
-                <IconButton icon="chevron-right" onPress={() => { /* navigate to detail */ }} />
+                <IconButton icon="bookmark-outline" onPress={() => { handleProviderSelection(item) }} />
               </Card.Actions>
             </Card>
           )}
