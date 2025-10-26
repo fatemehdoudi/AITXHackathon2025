@@ -19,6 +19,7 @@ from .utils import clean_bcbs_address, geocode_address
 # -----------------------------
 class GraphState(TypedDict):
     insurance: Optional[str]
+    insurance_id: Optional[str]
     specialty: Optional[str]
     location: Optional[str]
     postal_code: Optional[str]
@@ -31,10 +32,11 @@ class GraphState(TypedDict):
 async def get_user_info(state: GraphState):
     print("🧾 Collecting user info...")
     # For now, hardcode example — later we’ll make it interactive
-    state["insurance"] = "Blue Cross Blue Shield"
-    state["specialty"] = "Cardiology"
-    state["location"] = "College Station, TX 77840"
-    state["postal_code"] = "77840"
+    state["insurance"] = state.get("insurance") or "Blue Cross Blue Shield"
+    state["insurance_id"] = state.get("insurance_id") or ""  # 
+    state["specialty"] = state.get("specialty") or "Cardiology"
+    state["location"] = state.get("location") or "College Station, TX 77840"
+    state["postal_code"] = state.get("postal_code") or "77840"
     print(f"User: {state}")
     return state
 

@@ -1,5 +1,4 @@
-// app/(app)/search.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { View, FlatList } from "react-native";
 import {
   Searchbar,
@@ -12,13 +11,12 @@ import {
   Menu,
   IconButton,
   ActivityIndicator,
+  HelperText,
 } from "react-native-paper";
-
-// If you use Expo, install expo-location for "Use my location":
-//   npx expo install expo-location
-// and then uncomment the imports and code below.
 import * as Location from "expo-location";
+import Constants from "expo-constants";
 
+// ----------------- Types -----------------
 type Provider = {
   id: string;
   name: string;
@@ -28,67 +26,35 @@ type Provider = {
   state: string;
   zip: string;
   lat: number;
-  lon: number;
-  medmatch_score: number; // 1-10
+  lon: number;            // we’ll map backend lng -> lon
+  medmatch_score: number; // 1-10 (placeholder for now)
 };
-
 type Coords = { lat: number; lon: number } | null;
 
+type BackendProvider = {
+  name: string;
+  specialty?: string;
+  address: string; // "3310 Longmire Dr, College Station, TX 77845"
+  phone?: string;  // "Call (979) 691-3300"
+  lat: number;
+  lng: number;
+  source_file?: string;
+};
+
+// ----------------- Config -----------------
+const API_BASE = "http://127.0.0.1:8000/api";
 const PROMPT = "Search by specialty, symptoms, or condition";
 
-// --- Mock provider data ---
-const MOCK: Provider[] = [
-  {
-    id: "1",
-    name: "Dr. Alicia Patel, MD",
-    phone: "(512) 555-0143",
-    address: "123 Main St",
-    city: "Austin",
-    state: "TX",
-    zip: "78701",
-    lat: 30.2715,
-    lon: -97.7426,
-    medmatch_score: 9,
-  },
-  {
-    id: "2",
-    name: "Riverbend Family Clinic",
-    phone: "(512) 555-0199",
-    address: "4501 Shoal Creek Blvd",
-    city: "Austin",
-    state: "TX",
-    zip: "78756",
-    lat: 30.3185,
-    lon: -97.7446,
-    medmatch_score: 7,
-  },
-  {
-    id: "3",
-    name: "Bryan Goerig, MD",
-    phone: "(979) 703-1902",
-    address: "1730 Birmingham Rd.",
-    city: "College Station",
-    state: "TX",
-    zip: "77845",
-    lat: 30.601389,
-    lon: -96.314445,
-    medmatch_score: 8,
-  },
-  {
-    id: "4",
-    name: "Southside Cardiology Group",
-    phone: "(512) 555-8811",
-    address: "2100 S 1st St",
-    city: "Austin",
-    state: "TX",
-    zip: "78704",
-    lat: 30.2442,
-    lon: -97.7619,
-    medmatch_score: 10,
-  },
-];
+// Very light ZIP -> coords mock (replace with your geocoder/backend)
+// const ZIP_TO_COORDS: Record<string, Coords> = {
+//   "78701": { lat: 30.2715, lon: -97.7426 },
+//   "78756": { lat: 30.3185, lon: -97.7446 },
+//   "78758": { lat: 30.3718, lon: -97.7203 },
+//   "78704": { lat: 30.2442, lon: -97.7619 },
+//   "77840": { lat: 30.6154, lon: -96.3267 }, // College Station (rough)
+// };
 
-// --- Utilities ---
+// ----------------- Utilities -----------------
 function haversineMiles(a: Coords, b: Coords) {
   if (!a || !b) return null;
   const toRad = (d: number) => (d * Math.PI) / 180;
@@ -105,28 +71,50 @@ function haversineMiles(a: Coords, b: Coords) {
   return R * c;
 }
 
-// Super-light ZIP → coords mock (replace with your geocoder/backend)
-const ZIP_TO_COORDS: Record<string, Coords> = {
-  "78701": { lat: 30.2715, lon: -97.7426 },
-  "78756": { lat: 30.3185, lon: -97.7446 },
-  "78758": { lat: 30.3718, lon: -97.7203 },
-  "78704": { lat: 30.2442, lon: -97.7619 },
-};
+function splitAddress(addr: string) {
+  // Expect formats like "3310 Longmire Dr, College Station, TX 77845"
+  const [street, rest] = addr.split(",").map((s) => s.trim());
+  if (!rest) return { address: addr, city: "", state: "", zip: "" };
+  const parts = rest.split(/\s*,\s*/); // ["College Station", "TX 77845"]
+  const city = parts[0] || "";
+  const stateZip = parts[1] || "";
+  const [state, zip] = stateZip.split(/\s+/);
+  return { address: street || addr, city, state: state || "", zip: zip || "" };
+}
 
+function cleanPhone(maybeCall: string | undefined) {
+  // Backend returns like "Call (979) 691-3300"
+  if (!maybeCall) return "";
+  const m = maybeCall.match(/\(?\d{3}\)?[ -.]?\d{3}[ -.]?\d{4}/);
+  return m ? m[0] : maybeCall.replace(/^Call\s*/i, "").trim();
+}
+
+// ----------------- Screen -----------------
 export default function SearchScreen() {
+  // Search inputs
   const [query, setQuery] = useState("");
-  const [zip, setZip] = useState("");
+  const [zip, setZip] = useState(""); // matches your sample
   const [useMyLocation, setUseMyLocation] = useState(false);
+
+  // Location
   const [deviceCoords, setDeviceCoords] = useState<Coords>(null);
   const [zipCoords, setZipCoords] = useState<Coords>(null);
   const [loadingLoc, setLoadingLoc] = useState(false);
 
+  // Sorting
   const [sortOpen, setSortOpen] = useState(false);
   const [sortBy, setSortBy] = useState<"distance" | "score" | "name">("distance");
 
-  // On "Use my location", request location (Expo). Fallback: leave coords null.
-  const handleUseMyLocation = async () => {
-    // If you want live device location, uncomment this block and the import.
+  // Data
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [fetching, setFetching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Which coords drive distance?
+  const origin: Coords = useMyLocation ? deviceCoords : zipCoords;
+
+  // --- Location handlers ---
+  const handleUseMyLocation = useCallback(async () => {
     try {
       setLoadingLoc(true);
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -137,40 +125,85 @@ export default function SearchScreen() {
       const loc = await Location.getCurrentPositionAsync({});
       setDeviceCoords({ lat: loc.coords.latitude, lon: loc.coords.longitude });
       setUseMyLocation(true);
+    } catch {
+      setUseMyLocation(false);
     } finally {
       setLoadingLoc(false);
     }
-    // Mock fallback (Austin City Hall):
-    setLoadingLoc(true);
-    setTimeout(() => {
-      setDeviceCoords({ lat: 30.2654, lon: -97.7431 });
-      setUseMyLocation(true);
-      setLoadingLoc(false);
-    }, 600);
-  };
+  }, []);
 
-  // When ZIP changes, set coords from our mock map
-  useEffect(() => {
-    const cleaned = zip.trim();
-    setZipCoords(cleaned.length >= 5 ? ZIP_TO_COORDS[cleaned] ?? null : null);
-  }, [zip]);
+//   useEffect(() => {
+//     const cleaned = zip.trim();
+//     setZipCoords(cleaned.length >= 5 ? ZIP_TO_COORDS[cleaned] ?? null : null);
+//   }, [zip]);
 
-  // Which coords drive distance?
-  const origin: Coords = useMyLocation ? deviceCoords : zipCoords;
+  // --- Fetch from backend ---
+  const runSearch = useCallback(async () => {
+    setError(null);
+    setFetching(true);
+    try {
+      // Build the body to match your backend
+      const body = {
+        query: query || "Find doctors",
+        insurance_network: 1,                // you can wire this to UI later
+        insurance: "Blue Cross Blue Shield", // ditto
+        insurance_id: "ZGP123456789",
+        specialty: "Cardiology",
+        location: `${zip}`,
+        postal_code: zip,
+      };
+      console.log('here is body -> ', body)
 
-  // Filter & sort the mock data
+      const res = await fetch(`${API_BASE}/searches/`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          // Authorization: `Bearer ${token}`, // if your API is protected
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`HTTP ${res.status}: ${text}`);
+      }
+
+      const json = await res.json();
+      const rawProviders: BackendProvider[] = json?.graph_state?.providers ?? [];
+
+      // Map backend -> frontend type
+      const mapped: Provider[] = rawProviders.map((p, idx) => {
+        const { address, city, state, zip } = splitAddress(p.address);
+        return {
+          id: `${json.id}-${idx + 1}`,
+          name: p.name,
+          phone: cleanPhone(p.phone),
+          address,
+          city,
+          state,
+          zip,
+          lat: p.lat,
+          lon: p.lng, // NOTE: backend uses 'lng'; we store 'lon'
+          medmatch_score: 7, // TODO: replace with real score when you have it
+        };
+      });
+
+      setProviders(mapped);
+    } catch (e: any) {
+      setError(e?.message || "Failed to fetch results");
+      setProviders([]);
+    } finally {
+      setFetching(false);
+    }
+  }, [API_BASE, query, zip]);
+
+  // --- Distance + sorting computed list ---
   const filteredSorted = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    let rows = MOCK.filter((p) => {
-      if (!q) return true;
-      // fields to match for the demo; expand as needed
-      const hay =
-        `${p.name} ${p.address} ${p.city} ${p.state} ${p.zip}`.toLowerCase();
-      return hay.includes(q);
-    }).map((p) => {
-      const d = haversineMiles(origin, { lat: p.lat, lon: p.lon });
-      return { ...p, distance: d };
-    }) as (Provider & { distance: number | null })[];
+    let rows = providers
+      .map((p) => {
+        const d = haversineMiles(origin, { lat: p.lat, lon: p.lon });
+        return { ...p, distance: d };
+      }) as (Provider & { distance: number | null })[];
 
     rows.sort((a, b) => {
       if (sortBy === "distance") {
@@ -181,12 +214,11 @@ export default function SearchScreen() {
       if (sortBy === "score") {
         return (b.medmatch_score ?? 0) - (a.medmatch_score ?? 0);
       }
-      // name
       return a.name.localeCompare(b.name);
     });
 
     return rows;
-  }, [query, origin, sortBy]);
+  }, [providers, origin, sortBy]);
 
   return (
     <View style={{ flex: 1, padding: 12, gap: 8 }}>
@@ -195,6 +227,7 @@ export default function SearchScreen() {
         placeholder={PROMPT}
         value={query}
         onChangeText={setQuery}
+        onSubmitEditing={runSearch}
         style={{ borderRadius: 12 }}
       />
 
@@ -219,14 +252,12 @@ export default function SearchScreen() {
           }}
           style={{ flex: 1 }}
           right={
-            zip ? (
-              <TextInput.Icon icon="close" onPress={() => setZip("")} />
-            ) : undefined
+            zip ? <TextInput.Icon icon="close" onPress={() => setZip("")} /> : undefined
           }
         />
       </View>
 
-      {/* Status chips */}
+      {/* Status + Sort */}
       <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
         <Chip selected={useMyLocation} onPress={() => setUseMyLocation(true)}>
           Device location
@@ -239,45 +270,32 @@ export default function SearchScreen() {
           ZIP {zipCoords ? "active" : "—"}
         </Chip>
 
-        {/* Sort Menu */}
         <Menu
           visible={sortOpen}
           onDismiss={() => setSortOpen(false)}
           anchor={
-            <Button
-              mode="outlined"
-              onPress={() => setSortOpen(true)}
-              icon="sort"
-            >
+            <Button mode="outlined" onPress={() => setSortOpen(true)} icon="sort">
               Sort: {sortBy === "distance" ? "Distance" : sortBy === "score" ? "Score" : "Name"}
             </Button>
           }
         >
-          <Menu.Item
-            onPress={() => {
-              setSortBy("distance");
-              setSortOpen(false);
-            }}
-            title="Distance"
-          />
-          <Menu.Item
-            onPress={() => {
-              setSortBy("score");
-              setSortOpen(false);
-            }}
-            title="MedMatch Score"
-          />
-          <Menu.Item
-            onPress={() => {
-              setSortBy("name");
-              setSortOpen(false);
-            }}
-            title="Name"
-          />
+          <Menu.Item onPress={() => { setSortBy("distance"); setSortOpen(false); }} title="Distance" />
+          <Menu.Item onPress={() => { setSortBy("score"); setSortOpen(false); }} title="MedMatch Score" />
+          <Menu.Item onPress={() => { setSortBy("name"); setSortOpen(false); }} title="Name" />
         </Menu>
+
+        <View style={{ flex: 1 }} />
+
+        <Button
+          mode="contained"
+          icon={fetching ? "progress-clock" : "magnify"}
+          onPress={runSearch}
+          disabled={fetching}
+        >
+          {fetching ? "Searching..." : "Search"}
+        </Button>
       </View>
 
-      {/* Loading indicator for location */}
       {loadingLoc && (
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <ActivityIndicator />
@@ -285,66 +303,74 @@ export default function SearchScreen() {
         </View>
       )}
 
+      {error && <HelperText type="error" visible>{error}</HelperText>}
+
       <Divider />
 
       {/* Results */}
-      <FlatList
-        data={filteredSorted}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={{ gap: 10, paddingVertical: 8 }}
-        renderItem={({ item }) => (
-          <Card mode="elevated" style={{ borderRadius: 16 }}>
-            <Card.Title
-              title={item.name}
-              right={() => (
-                <View style={{ flexDirection: "row", alignItems: "center" }}>
-                  <Chip compact style={{ marginRight: 8 }}>
-                    Score: {item.medmatch_score}
-                  </Chip>
-                  <Chip compact>
-                    {item.distance != null
-                      ? `${item.distance.toFixed(1)} mi`
-                      : "— mi"}
-                  </Chip>
-                </View>
-              )}
-            />
-            <Card.Content>
-              <Text selectable>{item.phone}</Text>
-              <Text selectable>
-                {item.address}
-                {", "}
-                {item.city}, {item.state} {item.zip}
-              </Text>
-            </Card.Content>
-            <Card.Actions>
-              <Button
-                icon="phone"
-                onPress={() => {
-                  // Example: Linking.openURL(`tel:${item.phone}`)
-                }}
-              >
-                Call
-              </Button>
-              <Button
-                icon="map-marker"
-                onPress={() => {
-                  // Example: Linking.openURL(`https://maps.apple.com/?q=${encodeURIComponent(item.address + " " + item.city)}`)
-                }}
-              >
-                Map
-              </Button>
-              <View style={{ flex: 1 }} />
-              <IconButton icon="chevron-right" onPress={() => { /* navigate to detail */ }} />
-            </Card.Actions>
-          </Card>
-        )}
-        ListEmptyComponent={
-          <View style={{ paddingVertical: 24, alignItems: "center" }}>
-            <Text>No providers found. Try a broader search.</Text>
-          </View>
-        }
-      />
+      {fetching ? (
+        <View style={{ paddingVertical: 24, alignItems: "center" }}>
+          <ActivityIndicator />
+          <Text>Loading results…</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={filteredSorted}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={{ gap: 10, paddingVertical: 8 }}
+          renderItem={({ item }) => (
+            <Card mode="elevated" style={{ borderRadius: 16 }}>
+              <Card.Title
+                title={item.name}
+                right={() => (
+                  <View style={{ flexDirection: "row", alignItems: "center" }}>
+                    <Chip compact style={{ marginRight: 8 }}>
+                      Score: {item.medmatch_score}
+                    </Chip>
+                    <Chip compact>
+                      {item.distance != null ? `${item.distance.toFixed(1)} mi` : "— mi"}
+                    </Chip>
+                  </View>
+                )}
+              />
+              <Card.Content>
+                <Text selectable>{item.phone}</Text>
+                <Text selectable>
+                  {item.address}
+                  {", "}
+                  {item.city}, {item.state} {item.zip}
+                </Text>
+              </Card.Content>
+              <Card.Actions>
+                <Button
+                  icon="phone"
+                  onPress={() => {
+                    // Linking.openURL(`tel:${item.phone.replace(/\D/g, "")}`)
+                  }}
+                >
+                  Call
+                </Button>
+                <Button
+                  icon="map-marker"
+                  onPress={() => {
+                    // const q = encodeURIComponent(`${item.address}, ${item.city}, ${item.state} ${item.zip}`);
+                    // Linking.openURL(`https://maps.apple.com/?q=${q}`);
+                  }}
+                >
+                  Map
+                </Button>
+                <View style={{ flex: 1 }} />
+                <IconButton icon="chevron-right" onPress={() => { /* navigate to detail */ }} />
+              </Card.Actions>
+            </Card>
+          )}
+          ListEmptyComponent={
+            <View style={{ paddingVertical: 24, alignItems: "center" }}>
+              <Text>No providers found. Try a broader search.</Text>
+            </View>
+          }
+        />
+      )}
     </View>
   );
 }
