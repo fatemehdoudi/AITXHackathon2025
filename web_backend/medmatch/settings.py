@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     'app_settings',
     'insurance_networks',
     'insurance_plans',
+    'outreach',
     'providers',
     'searches',
 ]
