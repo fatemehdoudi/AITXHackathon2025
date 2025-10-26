@@ -29,7 +29,7 @@ async def get_bcbs_providers_live(postal_code, prefix, specialty, location, max_
 
         for i in range(1, max_pages + 1):
             url = f"{base_url}&page={i}"
-            print(f"🌐 Loading BCBS page {i}: {url}")
+            # print(f"🌐 Loading BCBS page {i}: {url}")
             await page.goto(url, wait_until="networkidle", timeout=60000)
 
             try:
@@ -55,7 +55,7 @@ async def get_bcbs_providers_live(postal_code, prefix, specialty, location, max_
                 })
                 """,
             )
-            print(f"✅ Extracted {len(cards)} providers from page {i}")
+            # print(f"✅ Extracted {len(cards)} providers from page {i}")
             providers.extend(cards)
 
         await browser.close()
@@ -66,7 +66,7 @@ async def get_bcbs_providers_live(postal_code, prefix, specialty, location, max_
             writer = csv.DictWriter(f, fieldnames=providers[0].keys())
             writer.writeheader()
             writer.writerows(providers)
-        print(f"💾 Saved {len(providers)} providers → bcbs_live_providers.csv")
+        # print(f"💾 Saved {len(providers)} providers → bcbs_live_providers.csv")
     else:
         print("⚠️ No providers found.")
 

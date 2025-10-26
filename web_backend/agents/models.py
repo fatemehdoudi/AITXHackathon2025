@@ -10,7 +10,7 @@ def get_nemotron():
         openai_api_base="https://openrouter.ai/api/v1",
         openai_api_key=os.getenv("OPEN_AI_API_KEY"),
         model_name="nvidia/nemotron-nano-9b-v2",
-        temperature=0.3,
+        temperature=0.0,
         max_tokens=800,
     )
     return llm
