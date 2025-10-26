@@ -9,7 +9,8 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": { "NSLocationWhenInUseUsageDescription": "We use your location to show nearby providers." } 
     },
     "android": {
       "adaptiveIcon": {
@@ -18,6 +19,7 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
+      "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"],
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
@@ -38,8 +40,10 @@
             "backgroundColor": "#000000"
           }
         }
-      ]
+      ],
+      ["expo-location", { "locationAlwaysAndWhenInUsePermission": "Allow MedMatch to access your location." }],
     ],
+
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
