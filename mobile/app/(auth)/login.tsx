@@ -23,7 +23,7 @@ export default function LoginScreen() {
     setLoading(true);
     try {
       await loginWithPassword(email.trim(), pw);
-      router.replace("/home"); // change to your post-login route
+      router.replace("/(app)/home"); // change to your post-login route
     } catch (e: any) {
       setErr(e.message || "Login failed.");
     } finally {
