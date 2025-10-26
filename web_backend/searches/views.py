@@ -50,10 +50,12 @@ class UserSearchViewSet(viewsets.ModelViewSet):
         #    (falls back to the same defaults your main.py currently uses)
         init_state: GraphState = {
             "insurance": payload.get("insurance") or "Blue Cross Blue Shield",
+            "insurance_id": payload.get("insurance_id") or "",
             "specialty": payload.get("specialty") or "Cardiology",
             "location": payload.get("location") or "College Station, TX 77840",
             "postal_code": payload.get("postal_code") or "77840",
         }
+        state: GraphState = await agent_app.ainvoke(init_state)
 
         # 3) Run the LangGraph
         state: GraphState = await agent_app.ainvoke(init_state)
