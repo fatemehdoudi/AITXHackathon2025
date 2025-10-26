@@ -1,28 +1,22 @@
 """
-Full agentic pipeline (LLM modularized via models.py):
-1. Ask for symptom or specialty
-2. Infer specialty via LLM if needed
-3. Ask for insurance, prefix, and location
-4. If BCBS → scrape providers live
-5. Search and summarize reviews (via Tavily + LLM)
-6. Score and rank providers (sentiment + reviews + distance + alignment)
-7. Cleanup temp files
+Full agentic pipeline (LLM modularized via models.py and scoring.py)
 """
 
-import asyncio, os, csv, math, re, glob
+import asyncio, os, csv, re, glob
 from typing import TypedDict, Optional
 from langgraph.graph import StateGraph, START, END
 from dotenv import load_dotenv
 from tavily import TavilyClient
 from bcbs_scraper import get_bcbs_providers_live
-from models import get_nemotron  # ✅ LLM abstraction
+from models import get_nemotron
+from scoring import compute_final_scores  # ✅ imported scoring logic
 
 # -----------------------------
 # Setup
 # -----------------------------
 load_dotenv()
 tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
-llm = get_nemotron()  # ✅ use Nemotron via OpenRouter
+llm = get_nemotron()
 
 # -----------------------------
 # Graph State
@@ -151,7 +145,7 @@ async def find_providers(state: GraphState):
 
 
 # -----------------------------
-# Step 3: Review search
+# Step 3–4: Review search + summarization
 # -----------------------------
 def search_doctor_reviews(name, city, specialty):
     query = f"{name} {city} {specialty} reviews site:healthgrades.com OR site:vitals.com OR site:zocdoc.com OR site:ratemds.com"
@@ -164,9 +158,6 @@ def search_doctor_reviews(name, city, specialty):
         return []
 
 
-# -----------------------------
-# Step 4: Review summarization
-# -----------------------------
 def summarize_reviews(name, specialty, city, reviews, symptom: Optional[str] = None):
     if not reviews:
         return {"name": name, "sentiment": 0, "review_count": 0, "summary": "No reviews found."}
@@ -199,77 +190,7 @@ Reviews:
 
 
 # -----------------------------
-# 🧠 NEW: Specialty–symptom alignment reward
-# -----------------------------
-def compute_alignment_reward(specialty: str, symptom: Optional[str]) -> float:
-    """Use LLM to check if specialty fits the symptom; return multiplier."""
-    if not symptom:
-        return 1.0
-    prompt = f"""
-You are a medical expert.
-Is the specialty "{specialty}" appropriate for treating or diagnosing the symptom/disease "{symptom}"?
-Answer with one word only: YES, MAYBE, or NO.
-"""
-    try:
-        resp = llm.invoke(prompt)
-        answer = resp.content.strip().upper() if hasattr(resp, "content") else str(resp).upper()
-        if answer.startswith("YES"):
-            return 1.10
-        elif answer.startswith("MAYBE"):
-            return 1.05
-        else:
-            return 1.0
-    except Exception as e:
-        print(f"⚠️ Alignment check failed for {specialty}: {e}")
-        return 1.0
-
-
-# -----------------------------
-# Step 5: Scoring & ranking
-# -----------------------------
-def extract_distance(address):
-    match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*miles", address)
-    return float(match.group(1)) if match else None
-
-
-def compute_final_scores(providers, summaries, symptom: Optional[str] = None):
-    results = []
-    for p in providers:
-        s = next((x for x in summaries if x["name"] == p["Name"]), None)
-        if not s:
-            continue
-        sentiment = s["sentiment"]
-        reviews = s["review_count"]
-        distance = extract_distance(p["Address"]) or 10.0
-
-        review_score = min(1, math.log(1 + reviews) / math.log(1 + 50)) * 10
-        distance_score = max(0, 10 - min(distance, 10))
-        base_score = 0.5 * sentiment + 0.3 * review_score + 0.2 * distance_score
-
-        align_multiplier = compute_alignment_reward(p["Specialty"], symptom)
-        final_score = round(base_score * align_multiplier, 2)
-
-        results.append({
-            "Name": p["Name"],
-            "FinalScore": final_score,
-            "Sentiment": sentiment,
-            "Reviews": reviews,
-            "Distance(mi)": distance,
-            "AlignmentBonus": align_multiplier,
-        })
-
-    ranked = sorted(results, key=lambda x: x["FinalScore"], reverse=True)
-    print("\n🏁 Final Doctor Ranking (with alignment reward):\n")
-    for i, r in enumerate(ranked, 1):
-        bonus = f" (x{r['AlignmentBonus']})" if r['AlignmentBonus'] > 1 else ""
-        print(f"{i}. {r['Name']} — Score {r['FinalScore']}{bonus} "
-              f"(Sentiment {r['Sentiment']}/10, Reviews {r['Reviews']}, {r['Distance(mi)']} mi)")
-    print("=" * 70)
-    return ranked
-
-
-# -----------------------------
-# Step 6: Pipeline execution
+# Step 5: Analysis and scoring
 # -----------------------------
 async def analyze_and_score(state: GraphState):
     providers = state.get("providers", [])
