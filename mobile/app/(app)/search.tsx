@@ -240,6 +240,8 @@ export default function SearchScreen() {
         redirect: "follow"
     };
 
+    console.log('here is requestOptions -> ', requestOptions)
+
     fetch(`${API_BASE}/outreach/prospects/toggle/`, requestOptions)
     .then((response) => response.text())
     .then((result) => console.log(result))
