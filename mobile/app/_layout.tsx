@@ -12,8 +12,8 @@ const theme = {
   fonts,
   colors: {
     ...MD3LightTheme.colors,
-    primary: "#2E7D32", // MedMatch green vibe
-    secondary: "#1565C0",
+    primary: "#094dabff", // MedMatch green vibe
+    secondary: "#3487e4ff",
   },
 };
 
