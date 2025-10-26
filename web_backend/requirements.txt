@@ -70,3 +70,4 @@ pandas
 djangorestframework
 uvicorn
 djangorestframework-simplejwt
+whitenoise

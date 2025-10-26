@@ -5,9 +5,13 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useTheme } from "react-native-paper";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { View, ActivityIndicator } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
 
 export default function AppTabsLayout() {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
+
   const [checking, setChecking] = useState(true);
   const [authed, setAuthed] = useState(false);
 
@@ -29,13 +33,18 @@ export default function AppTabsLayout() {
 
   if (!authed) return <Redirect href="/(auth)/login" />;
 
+  const extra = Math.max(insets.bottom, 12); // at least 12px even on Android
+
   return (
     <Tabs
       screenOptions={{
         headerShown: true,
         tabBarActiveTintColor: theme.colors.primary,
         tabBarInactiveTintColor: theme.colors.outline,
-        tabBarStyle: { height: 60, paddingBottom: 8, paddingTop: 6 },
+        tabBarStyle: { 
+            height: 50 + extra, 
+            paddingBottom: extra, 
+            paddingTop: 6 },
         headerTitleAlign: "center",
       }}
     >
