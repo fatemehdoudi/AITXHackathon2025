@@ -19,6 +19,11 @@ class UserSettings(models.Model):
         null=True, blank=True, on_delete=models.SET_NULL, related_name="user_settings"
     )
 
+    group_id = models.CharField(max_length=100, null=True, blank=True)
+    member_id = models.CharField(max_length=100, null=True, blank=True)
+    member_first_name = models.CharField(max_length=100, null=True, blank=True)
+    member_last_name = models.CharField(max_length=100, null=True, blank=True)
+
     # search
     default_radius_miles = models.PositiveIntegerField(default=25)
 
