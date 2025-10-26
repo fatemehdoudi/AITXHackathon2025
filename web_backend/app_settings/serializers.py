@@ -12,7 +12,7 @@ class UserSettingsSerializer(serializers.ModelSerializer):
             "insurance_network", "insurance_network_name",
             "insurance_plan", "insurance_plan_name",
             "default_radius_miles",
-            "created_at", "updated_at",
+            "created_at", "updated_at", "group_id", "member_id", "member_first_name", "member_last_name",
         ]
         read_only_fields = ["created_at", "updated_at"]
 

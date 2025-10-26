@@ -23,6 +23,10 @@ type AppSettings = {
   insurance_plan?: number | null;    // FK id
   insurance_plan_name?: string | null;    // FK name
   default_search_radius?: number | null;
+  group_id?: string | null;
+  member_id?: string | null;
+  member_first_name?: string | null;
+  member_last_name?: string | null;
   // add any others your serializer exposes
 };
 
@@ -178,6 +182,50 @@ export default function Settings() {
             mode="outlined"
             keyboardType="number-pad"
             value={data.insurance_plan_name ?? ""}
+            onChangeText={(t) => {
+              const id = safeNumber(t);
+              setData((prev) => ({ ...prev, insurance_plan: id }));
+              debouncedPatch({ insurance_plan: id });
+            }}
+          />
+          <TextInput
+            label="Group ID"
+            mode="outlined"
+            keyboardType="number-pad"
+            value={data.group_id ?? ""}
+            onChangeText={(t) => {
+              const id = safeNumber(t);
+              setData((prev) => ({ ...prev, insurance_plan: id }));
+              debouncedPatch({ insurance_plan: id });
+            }}
+          />
+          <TextInput
+            label="Member ID"
+            mode="outlined"
+            keyboardType="number-pad"
+            value={data.member_id ?? ""}
+            onChangeText={(t) => {
+              const id = safeNumber(t);
+              setData((prev) => ({ ...prev, insurance_plan: id }));
+              debouncedPatch({ insurance_plan: id });
+            }}
+          />
+          <TextInput
+            label="Member First Name"
+            mode="outlined"
+            keyboardType="number-pad"
+            value={data.member_first_name ?? ""}
+            onChangeText={(t) => {
+              const id = safeNumber(t);
+              setData((prev) => ({ ...prev, insurance_plan: id }));
+              debouncedPatch({ insurance_plan: id });
+            }}
+          />
+          <TextInput
+            label="Member Last Name"
+            mode="outlined"
+            keyboardType="number-pad"
+            value={data.member_last_name ?? ""}
             onChangeText={(t) => {
               const id = safeNumber(t);
               setData((prev) => ({ ...prev, insurance_plan: id }));
