@@ -20,7 +20,7 @@ It integrates deterministic logic (data filtering and scoring) with a **large la
 ### 🧩 Architecture Overview
 
 1. **Data Layer**
-   - The backend ingests structured healthcare provider data (e.g., NPI information, insurance coverage, specialty, and location).
+   - The backend ingests structured healthcare provider data (e.g., insurance coverage, specialty, and location).
    - Providers are stored in lightweight model classes defined in `models.py`.
    - The CLI and mobile interfaces both interact with this shared data abstraction.
 
@@ -56,7 +56,6 @@ It integrates deterministic logic (data filtering and scoring) with a **large la
 - The agent layer is decoupled via an abstract reasoning API, allowing replacement or fine-tuning of the underlying LLM model.
 - Designed for future multi-insurer support (extend scoring rules and add insurance metadata).
 - All components share the same environment and dependency set (`requirements.txt`).
-- Logging and traceability are implemented in `test.py` to validate scoring stability and reasoning consistency.
 
 ---
 
@@ -64,7 +63,7 @@ It integrates deterministic logic (data filtering and scoring) with a **large la
 
 ```bash
 # Run provider matching and reasoning
-python3 main.py --input sample_patient.json
+python3 main.py
 
 ---
 
