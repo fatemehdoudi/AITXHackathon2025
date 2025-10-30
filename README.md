@@ -43,16 +43,6 @@ python main.py
 
 ---
 
-## 🧩 Notes
-- Both the CLI and mobile app use the same `requirements.txt` file.
-- After installing new dependencies:
-  ```bash
-  pip freeze > requirements.txt
-  ```
-- Make sure your virtual environment is activated before running any component.
-
----
-
 ## 👥 Contributors
 - **Fatemeh Doudi**
 - **Brad Hall**
